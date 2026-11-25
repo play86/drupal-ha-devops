@@ -25,3 +25,7 @@ output "rds_endpoint" {
 output "efs_id" {
   value = aws_efs_file_system.files.id
 }
+
+output "bastion_ip" {
+  value = aws_instance.bastion.public_ip
+}

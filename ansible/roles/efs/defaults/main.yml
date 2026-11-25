@@ -1,0 +1,2 @@
+efs_region: us-east-1
+efs_mount_path: /mnt/efs-files

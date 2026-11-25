@@ -1,0 +1,26 @@
+- name: Install PHP, extensions and tools
+  ansible.builtin.apt:
+    name:
+      - php
+      - libapache2-mod-php
+      - php-cli
+      - php-mysql
+      - php-gd
+      - php-xml
+      - php-mbstring
+      - php-curl
+      - php-zip
+      - php-intl
+      - php-opcache
+      - unzip
+      - git
+      - composer
+    state: present
+    update_cache: true
+
+- name: Raise PHP memory limit
+  ansible.builtin.lineinfile:
+    path: /etc/php/8.3/apache2/php.ini
+    regexp: '^memory_limit'
+    line: memory_limit = 256M
+  notify: Restart apache

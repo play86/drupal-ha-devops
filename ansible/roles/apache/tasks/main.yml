@@ -1,0 +1,33 @@
+- name: Install Apache
+  ansible.builtin.apt:
+    name: apache2
+    state: present
+    update_cache: true
+
+- name: Enable rewrite module
+  ansible.builtin.command: a2enmod rewrite
+  args:
+    creates: /etc/apache2/mods-enabled/rewrite.load
+  notify: Restart apache
+
+- name: Allow .htaccess overrides for Drupal
+  ansible.builtin.copy:
+    dest: /etc/apache2/conf-available/drupal.conf
+    content: |
+      <Directory /var/www/html>
+        AllowOverride All
+      </Directory>
+    mode: "0644"
+  notify: Restart apache
+
+- name: Enable Drupal conf
+  ansible.builtin.command: a2enconf drupal
+  args:
+    creates: /etc/apache2/conf-enabled/drupal.conf
+  notify: Restart apache
+
+- name: Start and enable Apache
+  ansible.builtin.systemd:
+    name: apache2
+    enabled: true
+    state: started

@@ -1,0 +1,26 @@
+- name: Install NFS client
+  ansible.builtin.apt:
+    name: nfs-common
+    state: present
+    update_cache: true
+
+- name: Create mount point
+  ansible.builtin.file:
+    path: "{{ efs_mount_path }}"
+    state: directory
+
+- name: Mount EFS
+  ansible.posix.mount:
+    path: "{{ efs_mount_path }}"
+    src: "{{ efs_id }}.efs.{{ efs_region }}.amazonaws.com:/"
+    fstype: nfs4
+    opts: nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,noresvport,_netdev
+    state: mounted
+
+- name: Let Apache write to EFS
+  ansible.builtin.file:
+    path: "{{ efs_mount_path }}"
+    owner: www-data
+    group: www-data
+    mode: "0775"
+  run_once: true

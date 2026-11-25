@@ -1,0 +1,109 @@
+- name: Create 2G swap file (Composer needs memory)
+  ansible.builtin.shell: |
+    fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
+    echo '/swapfile none swap sw 0 0' >> /etc/fstab
+  args:
+    creates: /swapfile
+
+- name: Create Drupal project with Composer
+  ansible.builtin.command: composer create-project drupal/recommended-project:^10 /var/www/drupal --no-interaction
+  args:
+    creates: /var/www/drupal/composer.json
+  environment:
+    COMPOSER_ALLOW_SUPERUSER: "1"
+    COMPOSER_HOME: /tmp/composer
+    COMPOSER_PROCESS_TIMEOUT: "1200"
+
+- name: Install Drush
+  ansible.builtin.command: composer require drush/drush --no-interaction
+  args:
+    chdir: /var/www/drupal
+    creates: /var/www/drupal/vendor/bin/drush
+  environment:
+    COMPOSER_ALLOW_SUPERUSER: "1"
+    COMPOSER_HOME: /tmp/composer
+    COMPOSER_PROCESS_TIMEOUT: "1200"
+
+- name: Create config sync folder
+  ansible.builtin.file:
+    path: /var/www/drupal/config/sync
+    state: directory
+
+- name: Give Apache user ownership of the project
+  ansible.builtin.file:
+    path: /var/www/drupal
+    owner: www-data
+    group: www-data
+    recurse: true
+
+- name: Create public files folder on EFS
+  ansible.builtin.file:
+    path: /mnt/efs-files/public
+    state: directory
+    owner: www-data
+    group: www-data
+    mode: "0775"
+  run_once: true
+
+- name: Link sites/default/files to EFS
+  ansible.builtin.file:
+    src: /mnt/efs-files/public
+    dest: /var/www/drupal/web/sites/default/files
+    state: link
+
+- name: Write settings.php (RDS + salt)
+  ansible.builtin.template:
+    src: settings.php.j2
+    dest: /var/www/drupal/web/sites/default/settings.php
+    owner: www-data
+    group: www-data
+    mode: "0640"
+  no_log: true
+
+- name: Point Apache docroot to Drupal
+  ansible.builtin.lineinfile:
+    path: /etc/apache2/sites-available/000-default.conf
+    regexp: '^\s*DocumentRoot'
+    line: '    DocumentRoot /var/www/drupal/web'
+  notify: Restart apache
+
+- name: Allow .htaccess in the Drupal docroot
+  ansible.builtin.copy:
+    dest: /etc/apache2/conf-available/drupal-web.conf
+    content: |
+      <Directory /var/www/drupal/web>
+        AllowOverride All
+        Require all granted
+      </Directory>
+    mode: "0644"
+  notify: Restart apache
+
+- name: Enable drupal-web conf
+  ansible.builtin.command: a2enconf drupal-web
+  args:
+    creates: /etc/apache2/conf-enabled/drupal-web.conf
+  notify: Restart apache
+
+- name: Check if Drupal is already installed
+  ansible.builtin.command: runuser -u www-data -- /var/www/drupal/vendor/bin/drush status --field=bootstrap
+  args:
+    chdir: /var/www/drupal/web
+  environment:
+    HOME: /tmp
+  register: drupal_status
+  changed_when: false
+  failed_when: false
+  run_once: true
+
+- name: Install Drupal site (one server only)
+  ansible.builtin.command: >
+    runuser -u www-data -- /var/www/drupal/vendor/bin/drush site:install standard
+    --account-name=admin --account-pass={{ admin_password | quote }}
+    --account-mail=admin@example.com --site-name="DOMinion HA Drupal" -y
+  args:
+    chdir: /var/www/drupal/web
+  environment:
+    HOME: /tmp
+  when: "'Successful' not in drupal_status.stdout"
+  run_once: true
+  no_log: true
