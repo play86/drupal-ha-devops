@@ -1,0 +1,75 @@
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  AWS_DEFAULT_REGION: us-east-1
+  BASTION_IP: ${{ secrets.BASTION_IP }}
+  BASTION_SG_ID: ${{ secrets.BASTION_SG_ID }}
+  SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+  EXTRA_VARS_JSON: ${{ secrets.EXTRA_VARS_JSON }}
+  ALB_DNS: ${{ secrets.ALB_DNS }}
+
+jobs:
+  staging:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Install Ansible
+        run: |
+          pip install ansible-core boto3 botocore
+          ansible-galaxy collection install ansible.posix amazon.aws
+
+      - name: Deploy to ONE server (staging)
+        run: bash scripts/run-ansible.sh 'all[0]'
+
+  smoke-test:
+    needs: staging
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the site returns HTTP 200
+        run: |
+          for i in $(seq 1 10); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "http://${ALB_DNS}/" || true)
+            echo "Attempt $i: HTTP $code"
+            if [ "$code" = "200" ]; then exit 0; fi
+            sleep 10
+          done
+          exit 1
+
+  production:
+    needs: smoke-test
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Install Ansible
+        run: |
+          pip install ansible-core boto3 botocore
+          ansible-galaxy collection install ansible.posix amazon.aws
+
+      - name: Deploy to ALL servers (production)
+        run: bash scripts/run-ansible.sh all
+
+      - name: Final health check
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' "http://${ALB_DNS}/")
+          echo "HTTP $code"
+          test "$code" = "200"
